@@ -1,6 +1,6 @@
 //SPDX-License-Identifier: MIT
 //
-//
+//.......for people asking, yes this is 'one of those arbitrage bots'
 //
 //	↓	↓	↓	↓	↓	↓
 
