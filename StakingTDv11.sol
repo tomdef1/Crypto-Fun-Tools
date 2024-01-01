@@ -151,5 +151,4 @@ contract Staking_Tom_DeFi_v011 is ReentrancyGuard, Ownable, Pausable {
     function min(uint256 a, uint256 b) private pure returns (uint256) {
         return a < b ? a : b;
     }
-
 }
