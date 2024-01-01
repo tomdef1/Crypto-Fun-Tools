@@ -1,39 +1,40 @@
 // SPDX-License-Identifier: MIT
+pragma solidity 0.8.19;
 
-pragma solidity 0.8.18;
+import "@openzeppelin/contracts@4.7.0/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@4.7.0/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts@4.7.0/access/Ownable.sol";
+import "@openzeppelin/contracts@4.7.0/security/Pausable.sol";
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/AccessControl.sol";
-
-contract Staking_Tom_DeFi_v011 is ReentrancyGuard, AccessControl {
-    bytes32 public constant CONTROLLER_ROLE = keccak256("CONTROLLER_ROLE");
+contract Staking_Tom_DeFi_v011 is ReentrancyGuard, Ownable, Pausable {
     IERC20 public stakingToken;
     IERC20 public rewardToken;
 
-    uint256 public rewardRate; // tokens per second
-    uint256 public lastUpdateTime;
-    uint256 public rewardPerTokenStored;
+    struct StakingPeriod {
+        uint256 rewardRate; // Reward rate for the period
+        uint256 startTime;  // Start time of the staking period
+        uint256 endTime;    // End time of the staking period
+        uint256 lockupPeriod; // Lockup period for staking
+    }
 
-    mapping(address => uint256) public userRewardPerTokenPaid;
-    mapping(address => uint256) public rewards;
-    mapping(address => uint256) private _balances;
+    StakingPeriod public currentPeriod; // The current staking period
+    uint256 public rewardPerTokenStored; // Reward per token stored
 
-    event Staked(address indexed user, uint256 amount);
+    mapping(address => uint256) public userRewardPerTokenPaid; // User reward per token paid
+    mapping(address => uint256) public rewards; // Rewards mapping
+    mapping(address => uint256) private _balances; // Balances mapping
+
+    event Staked(address indexed user, uint256 amount, uint256 periodEndTime);
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 reward);
+    event NewPeriodStarted(uint256 rewardRate, uint256 startTime, uint256 endTime, uint256 lockupPeriod);
 
-    // Define Staking & Reward Token
-    constructor(address _stakingToken, address _rewardToken) {
-        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        stakingToken = IERC20(_stakingToken);
-        rewardToken = IERC20(_rewardToken);
-    }
-    
-    // Update reward state before more actions
+    // Constructor is empty as tokens will be initialized in setup phase
+    constructor() {}
+
+    // Modifier to update reward for an account
     modifier updateReward(address account) {
         rewardPerTokenStored = rewardPerToken();
-        lastUpdateTime = block.timestamp;
         if (account != address(0)) {
             rewards[account] = earned(account);
             userRewardPerTokenPaid[account] = rewardPerTokenStored;
@@ -41,25 +42,70 @@ contract Staking_Tom_DeFi_v011 is ReentrancyGuard, AccessControl {
         _;
     }
 
-    // Stake
-    function stake(uint256 _amount) external nonReentrant updateReward(msg.sender) {
-        require(_amount > 0, "Cannot stake 0");
-        _balances[msg.sender] += _amount;
-        stakingToken.transferFrom(msg.sender, address(this), _amount);
-        emit Staked(msg.sender, _amount);
+    // Function to start a new staking period with different parameters
+    function startNewPeriod(
+        address _stakingToken,
+        address _rewardToken,
+        uint256 _lockupPeriodDays,
+        uint256 _periodDurationDays,
+        uint256 rewardAmountEther
+    ) external onlyOwner updateReward(address(0)) {
+        // End the current period if it's still active
+        if (block.timestamp < currentPeriod.endTime) {
+            currentPeriod.endTime = block.timestamp;
+        }
+
+        // Convert reward amount from ether to wei
+        uint256 rewardAmount = rewardAmountEther * 1e18;
+
+        // Calculate the reward rate based on the period duration and reward amount
+        uint256 rewardRate = rewardAmount / (_periodDurationDays * 86400); // 86400 is the number of seconds in a day
+
+        // Setup new staking period with provided parameters
+        stakingToken = IERC20(_stakingToken);
+        rewardToken = IERC20(_rewardToken);
+        uint256 startTime = block.timestamp;
+        uint256 endTime = startTime + _periodDurationDays * 1 days;
+
+        currentPeriod = StakingPeriod({
+            rewardRate: rewardRate,
+            startTime: startTime,
+            endTime: endTime,
+            lockupPeriod: _lockupPeriodDays * 1 days
+        });
+
+        // Transfer reward tokens from owner to contract as reward pool
+        require(rewardToken.transferFrom(msg.sender, address(this), rewardAmount), "Reward deposit failed");
+
+        emit NewPeriodStarted(rewardRate, startTime, endTime, _lockupPeriodDays * 1 days);
     }
 
-    // Withdraw
-    function withdraw(uint256 _amount) public nonReentrant updateReward(msg.sender) {
+    // Stake function with checks for active staking period
+    function stake(uint256 _amount) external nonReentrant whenNotPaused updateReward(msg.sender) {
+        require(block.timestamp >= currentPeriod.startTime, "Staking period not started");
+        require(block.timestamp < currentPeriod.endTime, "Staking period has ended");
+        require(_amount > 0, "Cannot stake 0");
+
+        _balances[msg.sender] += _amount;
+        stakingToken.transferFrom(msg.sender, address(this), _amount);
+
+        emit Staked(msg.sender, _amount, currentPeriod.endTime);
+    }
+
+    // Withdraw function with checks for lockup period
+    function withdraw(uint256 _amount) public nonReentrant whenNotPaused updateReward(msg.sender) {
         require(_amount > 0, "Cannot withdraw 0");
         require(_balances[msg.sender] >= _amount, "Insufficient staked amount");
+        require(block.timestamp - currentPeriod.startTime >= currentPeriod.lockupPeriod, "Tokens are locked");
+
         _balances[msg.sender] -= _amount;
         stakingToken.transfer(msg.sender, _amount);
+
         emit Withdrawn(msg.sender, _amount);
     }
 
-    // Withdraw only rewards
-    function getReward() public nonReentrant updateReward(msg.sender) {
+    // Function to get rewards for a user
+    function getReward() public nonReentrant whenNotPaused updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
@@ -68,89 +114,42 @@ contract Staking_Tom_DeFi_v011 is ReentrancyGuard, AccessControl {
         }
     }
 
-    // Calculates the amount of reward each token is entitled to at the current moment
+    // Function to calculate reward per token
     function rewardPerToken() public view returns (uint256) {
-        if (_totalSupply() == 0) {
+        if (totalSupply() == 0) {
             return rewardPerTokenStored;
         }
-        return rewardPerTokenStored + ((block.timestamp - lastUpdateTime) * rewardRate * 1e18 / _totalSupply());
+        return rewardPerTokenStored + (currentPeriod.rewardRate * (min(block.timestamp, currentPeriod.endTime) - lastUpdateTime()) * 1e18 / totalSupply());
     }
 
-    // Calculates total rewards earned by an account
+    // Function to calculate earned rewards for an account
     function earned(address account) public view returns (uint256) {
         return (_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account]) / 1e18) + rewards[account];
     }
 
-    // Owner sets rate of reward token
-    function setRewardRate(uint256 _rate) external onlyRole(CONTROLLER_ROLE) {
-        rewardRate = _rate;
+    // Function to get the total supply of staked tokens
+    function totalSupply() public view returns (uint256) {
+        return stakingToken.balanceOf(address(this));
     }
 
-    // Define reward token
-    function setRewardToken(address _newRewardToken) external onlyRole(CONTROLLER_ROLE) {
-        rewardToken = IERC20(_newRewardToken);
+    // Function to get the last update time
+    function lastUpdateTime() public view returns (uint256) {
+        return min(block.timestamp, currentPeriod.endTime);
     }
 
-    // Define staking token
-    function setStakingToken(address _newStakingToken) external onlyRole(CONTROLLER_ROLE) {
-        stakingToken = IERC20(_newStakingToken);
+    // Function to pause the contract
+    function pause() external onlyOwner {
+        _pause();
     }
 
-    // Emergency exit allowing stakers to withdraw without rewards
-    function emergencyExit() external nonReentrant {
-        uint256 amount = _balances[msg.sender];
-        require(amount > 0, "No tokens to withdraw");
-        _balances[msg.sender] = 0;
-        stakingToken.transfer(msg.sender, amount);
-        rewards[msg.sender] = 0; // Resetting rewards as they won't be claimed using this function
-        emit Withdrawn(msg.sender, amount);
+    // Function to unpause the contract
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+    
+    // Utility function to get minimum of two values used in rewardPerToken function
+    function min(uint256 a, uint256 b) private pure returns (uint256) {
+        return a < b ? a : b;
     }
 
-    // Force return staked tokens and rewards, stopping everything
-    // USE WITH CAUTION as large amounts of stakers could result in mad gas fees
-    function forceBOOT() external onlyRole(CONTROLLER_ROLE) {
-        for(uint i=0; i < totalStakers; i++) {
-            // Logic to iterate over ALL stakers and return their tokens and rewards
-            // Address of staker: stakerAddress[i]
-            uint256 stakedAmount = _balances[stakerAddress[i]];
-            uint256 rewardAmount = rewards[stakerAddress[i]];
-            _balances[stakerAddress[i]] = 0;
-            rewards[stakerAddress[i]] = 0;
-            stakingToken.transfer(stakerAddress[i], stakedAmount);
-            rewardToken.transfer(stakerAddress[i], rewardAmount);
-        }
-        // Stop rewards and staking
-        rewardRate = 0;
-    }
-
-    // Returns the total number of stakers as an int
-    function totalStakers() public view returns (uint256) {
-        return totalStakers;
-    }
-
-    // Returns the initial reward amount in Ether (or the equivalent unit)
-    function initialRewardAmountinEther() public view returns (uint256) {
-        // Assuming 'initialReward' is stored when contract starts or reward is set
-        return initialReward / 1e18;
-    }
-
-    // Returns the current reward amount in Ether (or the equivalent unit)
-    function currentRewardAmountinEther() public view returns (uint256) {
-        // Assuming 'currentReward' is updated as rewards are paid out
-        return currentReward / 1e18;
-    }
-
-    // Returns the time remaining in minutes for the staking period
-    function timeRemainingMinutes() public view returns (uint256) {
-        if (block.timestamp >= stakingEndTime) {
-            return 0;
-        }
-        return (stakingEndTime - block.timestamp) / 60;
-    }
-
-    // Recover accidentally sent tokens (ERC20 and 721)
-    function recoverERC20(address tokenAddress, uint256 tokenAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    IERC20(tokenAddress).transfer(msg.sender, tokenAmount);}
-    function recoverERC721(address tokenAddress, uint256 tokenId) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        IERC721(tokenAddress).transferFrom(address(this), msg.sender, tokenId);}
 }
