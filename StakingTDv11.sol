@@ -54,13 +54,10 @@ contract Staking_Tom_DeFi_v011 is ReentrancyGuard, Ownable, Pausable {
         if (block.timestamp < currentPeriod.endTime) {
             currentPeriod.endTime = block.timestamp;
         }
-
         // Convert reward amount from ether to wei
         uint256 rewardAmount = rewardAmountEther * 1e18;
-
         // Calculate the reward rate based on the period duration and reward amount
         uint256 rewardRate = rewardAmount / (_periodDurationDays * 86400); // 86400 is the number of seconds in a day
-
         // Setup new staking period with provided parameters
         stakingToken = IERC20(_stakingToken);
         rewardToken = IERC20(_rewardToken);
@@ -73,8 +70,8 @@ contract Staking_Tom_DeFi_v011 is ReentrancyGuard, Ownable, Pausable {
             endTime: endTime,
             lockupPeriod: _lockupPeriodDays * 1 days
         });
-
         // Transfer reward tokens from owner to contract as reward pool
+        // Required for security if staking and reward tokens are the same
         require(rewardToken.transferFrom(msg.sender, address(this), rewardAmount), "Reward deposit failed");
 
         emit NewPeriodStarted(rewardRate, startTime, endTime, _lockupPeriodDays * 1 days);
@@ -151,4 +148,5 @@ contract Staking_Tom_DeFi_v011 is ReentrancyGuard, Ownable, Pausable {
     function min(uint256 a, uint256 b) private pure returns (uint256) {
         return a < b ? a : b;
     }
+
 }
